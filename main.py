@@ -392,6 +392,47 @@ async def index():
     """)
 
 
+
+@web_app.get("/watch/{msg_id}/{filename:path}")
+async def watch_file(msg_id: int, filename: str, code: str):
+    """HTML5 player page — preload=auto se fast buffering"""
+    decoded = urllib.parse.unquote(filename)
+    if not verify_code(msg_id, decoded, code):
+        raise HTTPException(status_code=403, detail="Invalid or expired link.")
+
+    stream_url = f"/dl/{msg_id}/{urllib.parse.quote(decoded)}?code={code}"
+    safe_title = decoded.replace('"', '&quot;')
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{safe_title}</title>
+<style>
+  * {{ margin:0; padding:0; box-sizing:border-box }}
+  body {{ background:#000; display:flex; flex-direction:column; align-items:center;
+          justify-content:center; min-height:100vh; font-family:sans-serif; color:#fff }}
+  video {{ width:100%; max-width:960px; max-height:90vh; background:#000 }}
+  .title {{ margin-top:12px; font-size:14px; color:#aaa; max-width:960px;
+             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 12px }}
+</style>
+</head>
+<body>
+<video
+  src="{stream_url}"
+  controls
+  autoplay
+  preload="auto"
+  playsinline
+  controlslist="nodownload"
+></video>
+<div class="title">{safe_title}</div>
+</body>
+</html>"""
+    return HTMLResponse(html)
+
+
 @web_app.get("/dl/{msg_id}/{filename:path}")
 async def stream_file(msg_id: int, filename: str, code: str, request: Request):
     decoded = urllib.parse.unquote(filename)
@@ -416,7 +457,7 @@ async def stream_file(msg_id: int, filename: str, code: str, request: Request):
 
     file_size = media.file_size
     mime_type = getattr(media, "mime_type", "application/octet-stream")
-    CHUNK_SIZE = 1024 * 1024  # 1 MB
+    CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB — faster initial load
 
     range_header = request.headers.get("range")
     start = 0
@@ -439,8 +480,10 @@ async def stream_file(msg_id: int, filename: str, code: str, request: Request):
         "Accept-Ranges":       "bytes",
         "Content-Disposition": f"inline; filename*=UTF-8''{safe_filename}",
         "Content-Length":      str(content_length),
-        "Content-Range":       f"bytes {start}-{end}/{file_size}",
+        "Cache-Control":       "no-store",
     }
+    if range_header:
+        response_headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
 
     async def generator():
         bytes_sent  = 0
